@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>School App</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f6fb; --card: #ffffff; --text: #1b2333; --muted: #6b7690;
+    --brand: #2f6fed; --brand-text: #ffffff; --line: #e1e6f0; --danger: #d64545; --ok: #1f9d63;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1420; --card: #181f2e; --text: #e8ecf5; --muted: #98a3bd; --line: #26304a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 0 0 10px; }
+  p.muted { color: var(--muted); margin: 0 0 12px; font-size: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
+  button { width: 100%; padding: 13px; font-size: 16px; font-weight: 600; border: 0; border-radius: 10px; background: var(--brand); color: var(--brand-text); margin-top: 14px; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); margin-top: 0; width: auto; padding: 8px 14px; font-size: 14px; }
+  button:disabled { opacity: .6; }
+  .msg { margin-top: 12px; font-size: 14px; }
+  .err { color: var(--danger); } .ok { color: var(--ok); }
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  .stat b { display: block; font-size: 26px; }
+  .stat span { color: var(--muted); font-size: 13px; }
+  .row { padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; }
+  .row:last-child { border-bottom: 0; }
+  .row small { color: var(--muted); }
+  select { width: 100%; padding: 12px; font-size: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .tabs button { margin-top: 0; background: var(--card); color: var(--text); border: 1px solid var(--line); }
+  .tabs button.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+  .row.c { align-items: center; }
+  .chips { display: flex; gap: 6px; }
+  .chip { width: auto; margin: 0; padding: 8px 12px; font-size: 14px; background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+  .chip.on.present { background: var(--ok); color: #fff; border-color: var(--ok); }
+  .chip.on.absent { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .chip.on.late { background: #d98a1f; color: #fff; border-color: #d98a1f; }
+  .chip.on.leave { background: #6b7690; color: #fff; border-color: #6b7690; }
+  .num { width: 90px; text-align: center; }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .bar i { display: block; height: 100%; background: var(--brand); }
+  .big { font-size: 34px; font-weight: 700; }
+  .badge { display: inline-block; background: var(--brand); color: #fff; border-radius: 99px; padding: 2px 10px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+// ====== Your Supabase connection (the publishable key is safe to keep here) ======
+const SUPABASE_URL = 'https://bbnhinlvelatsdynzdld.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_whe_YghJyPTNgQI8PuDgwg_yxLRtdsC';
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const app = document.getElementById('app');
+
+// Small helper to build screen elements safely
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    if (k === 'class') e.className = attrs[k];
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), attrs[k]);
+    else e.setAttribute(k, attrs[k]);
+  }
+  kids.flat().forEach(c => e.append(c instanceof Node ? c : document.createTextNode(String(c))));
+  return e;
+}
+function show(...nodes) { app.replaceChildren(...nodes); }
+
+// ====== Start: check if someone is already logged in ======
+async function start() {
+  const { data } = await db.auth.getSession();
+  if (!data.session) return loginScreen();
+  const { data: profile, error } = await db
+    .from('profiles').select('*').eq('id', data.session.user.id).single();
+  if (error || !profile) {
+    await db.auth.signOut();
+    return loginScreen('This account has no role yet. Please contact the app creator.');
+  }
+  route(profile);
+}
+
+// ====== Login screen ======
+function loginScreen(message) {
+  const email = h('input', { type: 'text', placeholder: 'Email or username', autocomplete: 'username', autocapitalize: 'none' });
+  const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' });
+  const msg = h('div', { class: 'msg err' }, message || '');
+  const btn = h('button', {
+    onclick: async () => {
+      msg.textContent = '';
+      btn.disabled = true; btn.textContent = 'Logging in...';
+      const { error } = await db.auth.signInWithPassword({ email: (v => v.includes('@') ? v : v + '@example.com')(email.value.trim().toLowerCase()), password: pass.value });
+      btn.disabled = false; btn.textContent = 'Log in';
+      if (error) { msg.textContent = 'Login failed: ' + error.message; return; }
+      start();
+    }
+  }, 'Log in');
+  show(h('div', { class: 'card' },
+    h('h1', {}, 'School App'),
+    h('p', { class: 'muted' }, 'Log in to continue'),
+    h('label', {}, 'Email or username'), email,
+    h('label', {}, 'Password'), pass,
+    btn, msg));
+}
+
+// ====== Send each role to its own screen ======
+function route(profile) {
+  if (profile.role === 'creator') return creatorScreen(profile);
+  if (profile.role === 'teacher') return teacherScreen(profile);
+  if (profile.role === 'student') return studentScreen(profile);
+  if (profile.role === 'principal') return principalScreen(profile);
+  comingSoonScreen(profile);
+}
+
+async function logout() { await db.auth.signOut(); loginScreen(); }
+
+function comingSoonScreen(profile) {
+  show(
+    h('div', { class: 'top' }, h('h1', {}, 'Welcome'), h('button', { class: 'ghost', onclick: logout }, 'Log out')),
+    h('div', { class: 'card' },
+      h('h2', {}, profile.full_name),
+      h('span', { class: 'badge' }, profile.role),
+      h('p', { class: 'muted', style: 'margin-top:12px' }, 'Your dashboard is coming in the next step.'))
+  );
+}
+
+// ====== Creator panel ======
+async function creatorScreen(profile) {
+  const statSchools = h('b', {}, '...');
+  const statUsers = h('b', {}, '...');
+  const list = h('div', {}, 'Loading...');
+  const nameInput = h('input', { type: 'text', placeholder: 'e.g. City Grammar School' });
+  const msg = h('div', { class: 'msg' });
+
+  async function refresh() {
+    const { data: schools, error } = await db.from('schools').select('id,name,created_at').order('created_at', { ascending: false });
+    if (error) { list.textContent = 'Could not load: ' + error.message; return; }
+    statSchools.textContent = schools.length;
+    const { count } = await db.from('profiles').select('*', { count: 'exact', head: true });
+    statUsers.textContent = count ?? 0;
+    if (!schools.length) { list.textContent = 'No schools yet. Add your first one above.'; return; }
+    list.replaceChildren(...schools.map(s =>
+      h('div', { class: 'row' },
+        h('div', {}, h('b', {}, s.name), h('br'), h('small', {}, 'Added ' + new Date(s.created_at).toLocaleDateString())))));
+  }
+
+  const addBtn = h('button', {
+    onclick: async () => {
+      const name = nameInput.value.trim();
+      msg.className = 'msg';
+      if (!name) { msg.className = 'msg err'; msg.textContent = 'Please type a school name.'; return; }
+      addBtn.disabled = true;
+      const { error } = await db.from('schools').insert({ name });
+      addBtn.disabled = false;
+      if (error) { msg.className = 'msg err'; msg.textContent = 'Error: ' + error.message; return; }
+      nameInput.value = '';
+      msg.className = 'msg ok'; msg.textContent = 'School added!';
+      refresh();
+    }
+  }, 'Add school');
+
+  show(
+    h('div', { class: 'top' },
+      h('div', {}, h('h1', {}, 'Creator Panel'), h('span', { class: 'badge' }, 'creator')),
+      h('button', { class: 'ghost', onclick: logout }, 'Log out')),
+    h('div', { class: 'stats' },
+      h('div', { class: 'stat' }, statSchools, h('span', {}, 'Schools')),
+      h('div', { class: 'stat' }, statUsers, h('span', {}, 'Users'))),
+    h('div', { class: 'card' },
+      h('h2', {}, 'Add a new school'),
+      h('label', {}, 'School name'), nameInput, addBtn, msg),
+    h('div', { class: 'card' }, h('h2', {}, 'All schools'), list)
+  );
+  refresh();
+}
+
+// ====== Shared helpers ======
+function today() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+function topbar(profile, label) {
+  return h('div', { class: 'top' },
+    h('div', {}, h('h1', {}, profile.full_name), h('span', { class: 'badge' }, label)),
+    h('button', { class: 'ghost', onclick: logout }, 'Log out'));
+}
+function card(...kids) { return h('div', { class: 'card' }, ...kids); }
+function pct(a, b) { return b > 0 ? Math.round((a / b) * 1000) / 10 : 0; }
+function bar(p) { const i = h('i'); i.style.width = Math.min(100, p) + '%'; return h('div', { class: 'bar' }, i); }
+function options(list) { return list.map(x => h('option', { value: x.id }, x.name)); }
+
+// ====== TEACHER ======
+async function teacherScreen(profile) {
+  const { data: classes } = await db.from('classes').select('id,name').order('name');
+  const { data: subjects } = await db.from('subjects').select('id,name').order('name');
+  const content = h('div');
+  const classSel = h('select', {}, options(classes || []));
+  let tab = 'att';
+  const bAtt = h('button', { onclick: () => { tab = 'att'; render(); } }, 'Attendance');
+  const bMarks = h('button', { onclick: () => { tab = 'marks'; render(); } }, 'Marks');
+  function render() {
+    bAtt.className = tab === 'att' ? 'on' : '';
+    bMarks.className = tab === 'marks' ? 'on' : '';
+    content.replaceChildren();
+    if (!classSel.value) return;
+    if (tab === 'att') attendanceView(profile, classSel.value, content);
+    else marksView(profile, classSel.value, subjects || [], content);
+  }
+  classSel.addEventListener('change', render);
+  show(
+    topbar(profile, 'Teacher'),
+    (classes || []).length
+      ? card(h('label', {}, 'Class'), classSel)
+      : card('No classes yet. Please ask the principal or creator to add a class.'),
+    h('div', { class: 'tabs' }, bAtt, bMarks),
+    content);
+  render();
+}
+
+function attendanceView(profile, classId, host) {
+  const dateIn = h('input', { type: 'date', value: today() });
+  const list = h('div');
+  const msg = h('div', { class: 'msg' });
+  let students = [];
+  const status = {};
+
+  async function load() {
+    list.textContent = 'Loading...'; msg.textContent = '';
+    const { data: st, error } = await db.from('profiles').select('id,full_name,roll_no')
+      .eq('role', 'student').eq('class_id', classId).order('full_name');
+    if (error) { list.textContent = error.message; return; }
+    students = sortByRoll(st || []);
+    const { data: att } = await db.from('attendance').select('student_id,status')
+      .eq('class_id', classId).eq('date', dateIn.value);
+    for (const k in status) delete status[k];
+    (att || []).forEach(a => status[a.student_id] = a.status);
+    students.forEach(s => { if (!status[s.id]) status[s.id] = 'present'; });
+    draw();
+  }
+  function draw() {
+    if (!students.length) { list.textContent = 'No students in this class yet.'; return; }
+    list.replaceChildren(...students.map(s => h('div', { class: 'row c' },
+      h('b', {}, label(s)),
+      h('div', { class: 'chips' },
+        [['present', 'P'], ['absent', 'A'], ['late', 'L'], ['leave', 'Lv']].map(([v, l]) =>
+          h('button', {
+            class: 'chip' + (status[s.id] === v ? ' on ' + v : ''),
+            onclick: () => { status[s.id] = v; draw(); }
+          }, l))))));
+  }
+  const save = h('button', {
+    onclick: async () => {
+      if (!students.length) return;
+      save.disabled = true;
+      const rows = students.map(s => ({
+        school_id: profile.school_id, student_id: s.id, class_id: classId,
+        date: dateIn.value, status: status[s.id], marked_by: profile.id
+      }));
+      const { error } = await db.from('attendance').upsert(rows, { onConflict: 'student_id,date' });
+      save.disabled = false;
+      msg.className = 'msg ' + (error ? 'err' : 'ok');
+      msg.textContent = error ? 'Error: ' + error.message : 'Attendance saved!';
+    }
+  }, 'Save attendance');
+  dateIn.addEventListener('change', load);
+  host.replaceChildren(
+    card(h('label', {}, 'Date'), dateIn,
+      h('p', { class: 'muted', style: 'margin:10px 0 0' }, 'P = Present, A = Absent, L = Late, Lv = Leave')),
+    card(list, save, msg));
+  load();
+}
+
+function marksView(profile, classId, subjects, host) {
+  const examSel = h('select');
+  const subSel = h('select', {}, options(subjects));
+  const totalIn = h('input', { type: 'number', value: '100', min: '1' });
+  const list = h('div');
+  const msg = h('div', { class: 'msg' });
+  const exMsg = h('div', { class: 'msg' });
+  const exName = h('input', { type: 'text', placeholder: 'e.g. Monthly Test 1' });
+  const exDate = h('input', { type: 'date', value: today() });
+  let students = [];
+  const inputs = {};
+
+  async function loadExams(selectId) {
+    const { data } = await db.from('exams').select('id,name').eq('class_id', classId)
+      .order('exam_date', { ascending: false });
+    examSel.replaceChildren(...options(data || []));
+    if (selectId) examSel.value = selectId;
+    loadMarks();
+  }
+  async function loadMarks() {
+    msg.textContent = '';
+    if (!examSel.value) { list.textContent = 'Create a test first.'; return; }
+    if (!subSel.value) { list.textContent = 'No subjects yet.'; return; }
+    list.textContent = 'Loading...';
+    const { data: st, error } = await db.from('profiles').select('id,full_name,roll_no')
+      .eq('role', 'student').eq('class_id', classId).order('full_name');
+    if (error) { list.textContent = error.message; return; }
+    students = sortByRoll(st || []);
+    const { data: res } = await db.from('results').select('student_id,marks_obtained,total_marks')
+      .eq('exam_id', examSel.value).eq('subject_id', subSel.value);
+    const have = {};
+    (res || []).forEach(r => have[r.student_id] = r);
+    if (res && res.length) totalIn.value = res[0].total_marks;
+    if (!students.length) { list.textContent = 'No students in this class yet.'; return; }
+    list.replaceChildren(...students.map(s => {
+      const inp = h('input', { type: 'number', class: 'num', min: '0', placeholder: '-' });
+      if (have[s.id]) inp.value = have[s.id].marks_obtained;
+      inputs[s.id] = inp;
+      return h('div', { class: 'row c' }, h('b', {}, label(s)), inp);
+    }));
+  }
+
+  const addEx = h('button', {
+    onclick: async () => {
+      const name = exName.value.trim();
+      if (!name) { exMsg.className = 'msg err'; exMsg.textContent = 'Please type a test name.'; return; }
+      addEx.disabled = true;
+      const { data, error } = await db.from('exams').insert({
+        school_id: profile.school_id, class_id: classId, name, exam_date: exDate.value || null
+      }).select('id').single();
+      addEx.disabled = false;
+      if (error) { exMsg.className = 'msg err'; exMsg.textContent = 'Error: ' + error.message; return; }
+      exName.value = '';
+      exMsg.className = 'msg ok'; exMsg.textContent = 'Test created!';
+      loadExams(data.id);
+    }
+  }, 'Create test');
+
+  const save = h('button', {
+    onclick: async () => {
+      const total = Number(totalIn.value);
+      if (!examSel.value || !subSel.value || !(total > 0)) {
+        msg.className = 'msg err'; msg.textContent = 'Choose a test, a subject and total marks.'; return;
+      }
+      const rows = [];
+      for (const s of students) {
+        const v = inputs[s.id] ? inputs[s.id].value : '';
+        if (v === '' || v == null) continue;
+        const m = Number(v);
+        if (m < 0 || m > total) {
+          msg.className = 'msg err';
+          msg.textContent = 'Marks for ' + s.full_name + ' must be between 0 and ' + total; return;
+        }
+        rows.push({
+          school_id: profile.school_id, exam_id: examSel.value, student_id: s.id,
+          subject_id: subSel.value, marks_obtained: m, total_marks: total
+        });
+      }
+      if (!rows.length) { msg.className = 'msg err'; msg.textContent = 'Enter at least one mark.'; return; }
+      save.disabled = true;
+      const { error } = await db.from('results').upsert(rows, { onConflict: 'exam_id,student_id,subject_id' });
+      save.disabled = false;
+      msg.className = 'msg ' + (error ? 'err' : 'ok');
+      msg.textContent = error ? 'Error: ' + error.message : 'Marks saved!';
+    }
+  }, 'Save marks');
+
+  examSel.addEventListener('change', loadMarks);
+  subSel.addEventListener('change', loadMarks);
+  host.replaceChildren(
+    card(h('h2', {}, 'New test'), h('label', {}, 'Test name'), exName,
+      h('label', {}, 'Date'), exDate, addEx, exMsg),
+    card(h('label', {}, 'Test'), examSel, h('label', {}, 'Subject'), subSel,
+      h('label', {}, 'Total marks'), totalIn),
+    card(list, save, msg));
+  loadExams();
+}
+
+// ====== STUDENT ======
+async function studentScreen(profile) {
+  const box = h('div', {}, 'Loading...');
+  show(topbar(profile, 'Student'), box);
+  const [att, res, exams, subs] = await Promise.all([
+    db.from('attendance').select('date,status').eq('student_id', profile.id),
+    db.from('results').select('exam_id,subject_id,marks_obtained,total_marks').eq('student_id', profile.id),
+    db.from('exams').select('id,name,exam_date').order('exam_date', { ascending: false }),
+    db.from('subjects').select('id,name')
+  ]);
+  const err = att.error || res.error || exams.error || subs.error;
+  if (err) { box.textContent = 'Error: ' + err.message; return; }
+
+  // Attendance
+  const c = { present: 0, absent: 0, late: 0, leave: 0 };
+  att.data.forEach(d => { if (c[d.status] !== undefined) c[d.status]++; });
+  const totalDays = att.data.length;
+  const attPct = pct(c.present + c.late, totalDays);
+
+  // Results
+  const subName = {}; subs.data.forEach(s => subName[s.id] = s.name);
+  const byExam = {}, bySub = {};
+  let gotAll = 0, totAll = 0;
+  res.data.forEach(r => {
+    const m = Number(r.marks_obtained), t = Number(r.total_marks);
+    gotAll += m; totAll += t;
+    (byExam[r.exam_id] = byExam[r.exam_id] || []).push({ sub: subName[r.subject_id] || 'Subject', m, t });
+    const b = (bySub[r.subject_id] = bySub[r.subject_id] || { m: 0, t: 0 });
+    b.m += m; b.t += t;
+  });
+
+  const nodes = [];
+  nodes.push(card(
+    h('h2', {}, 'Attendance'),
+    h('div', { class: 'big' }, attPct + '%'),
+    bar(attPct),
+    h('p', { class: 'muted', style: 'margin:10px 0 0' },
+      totalDays
+        ? 'Present ' + c.present + ' • Absent ' + c.absent + ' • Late ' + c.late + ' • Leave ' + c.leave + ' (of ' + totalDays + ' days)'
+        : 'No attendance marked yet.')));
+
+  const overall = pct(gotAll, totAll);
+  nodes.push(card(
+    h('h2', {}, 'Overall exam result'),
+    h('div', { class: 'big' }, totAll ? overall + '%' : '-'),
+    bar(overall),
+    h('p', { class: 'muted', style: 'margin:10px 0 0' },
+      totAll ? gotAll + ' / ' + totAll + ' marks' : 'No results yet.')));
+
+  const subKeys = Object.keys(bySub);
+  if (subKeys.length) {
+    nodes.push(card(h('h2', {}, 'Subject-wise report'),
+      ...subKeys.map(k => {
+        const p = pct(bySub[k].m, bySub[k].t);
+        return h('div', { style: 'margin-bottom:12px' },
+          h('div', { class: 'row', style: 'border:0;padding:0' },
+            h('b', {}, subName[k] || 'Subject'), h('span', {}, bySub[k].m + '/' + bySub[k].t + ' (' + p + '%)')),
+          bar(p));
+      })));
+  }
+
+  exams.data.filter(e => byExam[e.id]).forEach(e => {
+    const lines = byExam[e.id];
+    const m = lines.reduce((a, x) => a + x.m, 0), t = lines.reduce((a, x) => a + x.t, 0);
+    nodes.push(card(
+      h('div', { class: 'row', style: 'border:0;padding:0 0 6px' },
+        h('h2', { style: 'margin:0' }, e.name), h('b', {}, pct(m, t) + '%')),
+      ...lines.map(x => h('div', { class: 'row' }, h('span', {}, x.sub), h('span', {}, x.m + ' / ' + x.t)))));
+  });
+
+  box.replaceChildren(...nodes);
+}
+
+// ====== PRINCIPAL ======
+async function principalScreen(profile) {
+  const box = h('div', {}, 'Loading...');
+  show(topbar(profile, 'Principal'), box);
+  const [people, classes, attToday, res] = await Promise.all([
+    db.from('profiles').select('id,role,class_id'),
+    db.from('classes').select('id,name').order('name'),
+    db.from('attendance').select('class_id,status').eq('date', today()),
+    db.from('results').select('marks_obtained,total_marks')
+  ]);
+  const err = people.error || classes.error || attToday.error || res.error;
+  if (err) { box.textContent = 'Error: ' + err.message; return; }
+
+  const students = people.data.filter(p => p.role === 'student');
+  const teachers = people.data.filter(p => p.role === 'teacher');
+  const here = x => x.status === 'present' || x.status === 'late';
+  const todayPct = pct(attToday.data.filter(here).length, attToday.data.length);
+  const avg = pct(res.data.reduce((a, r) => a + Number(r.marks_obtained), 0),
+                  res.data.reduce((a, r) => a + Number(r.total_marks), 0));
+
+  const stat = (v, l) => h('div', { class: 'stat' }, h('b', {}, v), h('span', {}, l));
+  box.replaceChildren(
+    h('div', { class: 'stats' },
+      stat(students.length, 'Students'), stat(teachers.length, 'Teachers'),
+      stat(attToday.data.length ? todayPct + '%' : '-', "Today's attendance"),
+      stat(res.data.length ? avg + '%' : '-', 'Average exam score')),
+    card(h('h2', {}, 'Classes'),
+      ...(classes.data.length ? classes.data.map(cl => {
+        const n = students.filter(s => s.class_id === cl.id).length;
+        const a = attToday.data.filter(x => x.class_id === cl.id);
+        return h('div', { class: 'row' },
+          h('div', {}, h('b', {}, cl.name), h('br'), h('small', {}, n + ' students')),
+          h('span', {}, a.length ? pct(a.filter(here).length, a.length) + '% today' : 'Not marked'));
+      }) : ['No classes yet.'])),
+    studentTools(profile));
+}
+
+// ====== Roll number helpers (used by teacher screens) ======
+function sortByRoll(list) {
+  const coll = new Intl.Collator(undefined, { numeric: true });
+  return list.slice().sort((a, b) => coll.compare(a.roll_no || '', b.roll_no || '') || coll.compare(a.full_name || '', b.full_name || ''));
+}
+function label(s) { return (s.roll_no ? s.roll_no + '. ' : '') + s.full_name; }
+
+// ====== STUDENT TOOLS (principal): add one, import many, list ======
+const FIELDS = [
+  ['full_name', 'Student name'], ['roll_no', 'Roll no'], ['father_name', "Father's name"],
+  ['contact', 'Contact number'], ['class_name', 'Class']
+];
+
+function detectField(header) {
+  const t = String(header || '').toLowerCase();
+  if (/father|guardian|parent/.test(t)) return 'father_name';
+  if (/contact|phone|mobile|cell|whatsapp/.test(t)) return 'contact';
+  if (/roll|reg|admission|sr\.?\s*no|s\.?\s*no|\bid\b/.test(t)) return 'roll_no';
+  if (/class|grade|section|standard|std/.test(t)) return 'class_name';
+  if (/name|student/.test(t)) return 'full_name';
+  return null;
+}
+
+async function readFile(file) {
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+  return rows.filter(r => r.some(c => String(c).trim() !== ''));
+}
+
+function downloadCsv(name, rows) {
+  const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const csv = '\ufeff' + rows.map(r => r.map(esc).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// Sends students to the secure server function in small batches
+async function runImport(students, onProgress) {
+  const all = [];
+  for (let i = 0; i < students.length; i += 25) {
+    const chunk = students.slice(i, i + 25);
+    const { data, error } = await db.functions.invoke('create-students', { body: { students: chunk } });
+    if (error) {
+      let m = error.message;
+      try { const j = await error.context.json(); if (j && j.error) m = j.error; } catch (e) {}
+      return { error: m, done: all };
+    }
+    all.push(...data.results);
+    onProgress(Math.min(i + 25, students.length), students.length);
+  }
+  return { results: all };
+}
+
+function studentTools(profile) {
+  const wrap = h('div');
+  const result = h('div');
+  const listBox = h('div');
+  const bulkBox = h('div');
+  const classList = h('datalist', { id: 'class-list' });
+  const search = h('input', { type: 'text', placeholder: 'Search by name or roll no' });
+  let allStudents = [], classNames = {};
+
+  // ---- list of all students ----
+  async function loadList() {
+    const [st, cl] = await Promise.all([
+      db.from('profiles').select('id,full_name,roll_no,father_name,contact,class_id').eq('role', 'student').order('full_name'),
+      db.from('classes').select('id,name').order('name')
+    ]);
+    if (st.error) { listBox.textContent = 'Error: ' + st.error.message; return; }
+    classNames = {};
+    (cl.data || []).forEach(c => classNames[c.id] = c.name);
+    classList.replaceChildren(...(cl.data || []).map(c => h('option', { value: c.name })));
+    allStudents = sortByRoll(st.data || []);
+    drawList();
+  }
+  function drawList() {
+    const q = search.value.trim().toLowerCase();
+    const rows = allStudents.filter(s => !q ||
+      (s.full_name || '').toLowerCase().includes(q) || String(s.roll_no || '').toLowerCase().includes(q));
+    listBox.replaceChildren(
+      h('p', { class: 'muted' }, allStudents.length + ' students' + (rows.length > 100 ? ' (showing first 100, use search)' : '')),
+      ...rows.slice(0, 100).map(s => h('div', { class: 'row c' },
+        h('div', {}, h('b', {}, label(s)), h('br'),
+          h('small', {}, (classNames[s.class_id] || 'No class') +
+            (s.father_name ? ' • Father: ' + s.father_name : '') + (s.contact ? ' • ' + s.contact : ''))),
+        h('button', { class: 'ghost', onclick: () => resetLogin(s) }, 'Reset'))));
+  }
+  search.addEventListener('input', drawList);
+
+  // ---- give a student a new password and show the login ----
+  async function resetLogin(s) {
+    if (!confirm('Make a NEW password for ' + s.full_name + '? The old password will stop working.')) return;
+    result.replaceChildren(card('Please wait...'));
+    result.scrollIntoView({ behavior: 'smooth' });
+    const { data, error } = await db.functions.invoke('create-students', { body: { action: 'reset', student_id: s.id } });
+    if (error) {
+      let m = error.message;
+      try { const j = await error.context.json(); if (j && j.error) m = j.error; } catch (e) {}
+      result.replaceChildren(card(h('div', { class: 'msg err' }, 'Error: ' + m)));
+      return;
+    }
+    result.replaceChildren(card(
+      h('h2', {}, 'Login for ' + label(s)),
+      h('p', {}, 'Username: ' + data.username),
+      h('p', {}, 'Password: ' + data.password),
+      h('p', { class: 'muted' }, 'Save or screenshot this now. It will not be shown again.')));
+  }
+
+  // ---- show import result + login list ----
+  function showResults(results, errorMsg) {
+    const created = results.filter(r => r.status === 'created');
+    const skipped = results.filter(r => r.status !== 'created');
+    const nodes = [
+      h('h2', {}, 'Import result'),
+      h('p', {}, created.length + ' students added' + (skipped.length ? ', ' + skipped.length + ' skipped' : '') + '.')
+    ];
+    if (errorMsg) nodes.push(h('div', { class: 'msg err' }, errorMsg));
+    if (created.length) {
+      nodes.push(h('p', { class: 'muted' }, 'Save the login list now. Passwords cannot be shown again later.'));
+      created.slice(0, 5).forEach(r => nodes.push(h('div', { class: 'row' },
+        h('span', {}, label(r)), h('small', {}, r.username + ' / ' + r.password))));
+      nodes.push(h('button', {
+        onclick: () => downloadCsv('student-logins.csv',
+          [['Name', 'Roll no', 'Class', 'Username', 'Password'],
+           ...created.map(r => [r.full_name, r.roll_no, r.class_name, r.username, r.password])])
+      }, 'Download login list'));
+    }
+    skipped.slice(0, 50).forEach(r => nodes.push(h('div', { class: 'row' },
+      h('span', {}, (r.roll_no || '?') + ' ' + (r.full_name || '')), h('small', {}, r.note))));
+    result.replaceChildren(card(...nodes));
+  }
+
+  // ---- add one student ----
+  const f = {};
+  const mk = (key, lab, ph, extra) => {
+    f[key] = h('input', Object.assign({ type: 'text', placeholder: ph || '' }, extra || {}));
+    return [h('label', {}, lab), f[key]];
+  };
+  const formNodes = [
+    mk('full_name', 'Student name *'),
+    mk('roll_no', 'Roll no *'),
+    mk('father_name', "Father's name"),
+    mk('contact', 'Contact number', '03001234567', { inputmode: 'tel' }),
+    mk('class_name', 'Class *', 'e.g. 5-A', { list: 'class-list' })
+  ].flat();
+  const addMsg = h('div', { class: 'msg' });
+  const addBtn = h('button', {
+    onclick: async () => {
+      const row = {};
+      for (const k in f) row[k] = f[k].value.trim();
+      if (!row.full_name || !row.roll_no || !row.class_name) {
+        addMsg.className = 'msg err'; addMsg.textContent = 'Name, roll no and class are required.'; return;
+      }
+      addBtn.disabled = true; addMsg.className = 'msg'; addMsg.textContent = 'Adding...';
+      const out = await runImport([row], () => {});
+      addBtn.disabled = false; addMsg.textContent = '';
+      showResults(out.results || out.done || [], out.error);
+      if ((out.results || []).some(r => r.status === 'created')) {
+        for (const k in f) f[k].value = '';
+        loadList();
+      }
+    }
+  }, 'Add student');
+
+  // ---- import many from a file ----
+  const fileIn = h('input', { type: 'file', accept: '.csv,.xlsx,.xls' });
+  fileIn.addEventListener('change', async () => {
+    const file = fileIn.files[0];
+    if (!file) return;
+    bulkBox.textContent = 'Reading file...';
+    let rows;
+    try { rows = await readFile(file); }
+    catch (e) { bulkBox.textContent = 'Could not read this file. Please use an Excel or CSV file.'; return; }
+    if (rows.length < 2) { bulkBox.textContent = 'The file looks empty.'; return; }
+    let hi = 0;
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+      if (rows[i].filter(c => detectField(c)).length >= 2) { hi = i; break; }
+    }
+    const headers = rows[hi].map(c => String(c).trim());
+    const data = rows.slice(hi + 1);
+    const map = {};
+    FIELDS.forEach(([k]) => { map[k] = ''; });
+    headers.forEach((hd, idx) => { const k = detectField(hd); if (k && map[k] === '') map[k] = String(idx); });
+    drawMapping(headers, data, map);
+  });
+
+  function drawMapping(headers, data, map) {
+    const sels = {};
+    const defClass = h('input', { type: 'text', list: 'class-list', placeholder: 'Used for rows with no class' });
+    const preview = h('div', { class: 'muted' });
+    const prog = h('div', { class: 'msg' });
+
+    const getRows = () => data.map(r => {
+      const o = {};
+      FIELDS.forEach(([k]) => {
+        const i = sels[k].value;
+        const v = i === '' ? '' : r[Number(i)];
+        o[k] = String(v == null ? '' : v).trim();
+      });
+      if (!o.class_name) o.class_name = defClass.value.trim();
+      if (/^3\d{9}$/.test(o.contact)) o.contact = '0' + o.contact;
+      return o;
+    }).filter(o => o.full_name || o.roll_no);
+
+    const isValid = o => o.full_name && o.roll_no && o.class_name;
+    function renderPreview() {
+      const rows = getRows();
+      const ok = rows.filter(isValid);
+      preview.replaceChildren(
+        h('p', { style: 'margin:10px 0 4px' }, ok.length + ' of ' + rows.length + ' rows are ready to import.'),
+        ...ok.slice(0, 3).map(o => h('div', {}, o.roll_no + '. ' + o.full_name + ' • ' + o.class_name +
+          (o.father_name ? ' • ' + o.father_name : '') + (o.contact ? ' • ' + o.contact : ''))));
+    }
+
+    const mapNodes = FIELDS.map(([k, lab]) => {
+      const sel = h('select', {}, h('option', { value: '' }, '— none —'),
+        headers.map((hd, i) => h('option', { value: String(i) }, hd || ('Column ' + (i + 1)))));
+      sel.value = map[k];
+      sel.addEventListener('change', renderPreview);
+      sels[k] = sel;
+      return [h('label', {}, lab), sel];
+    }).flat();
+    defClass.addEventListener('input', renderPreview);
+
+    const go = h('button', {
+      onclick: async () => {
+        const rows = getRows();
+        const valid = rows.filter(isValid);
+        if (!valid.length) { prog.className = 'msg err'; prog.textContent = 'No valid rows. Check the column choices above.'; return; }
+        go.disabled = true; prog.className = 'msg'; prog.textContent = 'Importing 0 / ' + valid.length;
+        const out = await runImport(valid, (d, t) => { prog.textContent = 'Importing ' + d + ' / ' + t; });
+        go.disabled = false;
+        const invalid = rows.filter(o => !isValid(o)).map(o => Object.assign({}, o, { status: 'skipped', note: 'Missing name, roll no or class' }));
+        showResults([...(out.results || out.done || []), ...invalid], out.error);
+        prog.textContent = out.error ? '' : 'Done.';
+        loadList();
+      }
+    }, 'Import students');
+
+    bulkBox.replaceChildren(
+      h('p', { class: 'muted', style: 'margin:12px 0 0' }, 'Check that each column matches (found ' + data.length + ' rows):'),
+      ...mapNodes,
+      h('label', {}, 'Class for all (only if the file has no class column)'), defClass,
+      preview, go, prog);
+    renderPreview();
+  }
+
+  wrap.append(
+    classList,
+    card(h('h2', {}, 'Add one student'), ...formNodes, addBtn, addMsg),
+    card(h('h2', {}, 'Import many students'),
+      h('p', { class: 'muted' }, 'Upload an Excel or CSV file. Classes are created automatically and each student gets a login.'),
+      fileIn, bulkBox,
+      h('button', {
+        class: 'ghost', style: 'margin-top:12px',
+        onclick: () => downloadCsv('students-sample.csv', [
+          ['Student Name', 'Roll No', 'Father Name', 'Contact', 'Class'],
+          ['Ali Khan', '1', 'Ahmed Khan', '03001234567', '5-A'],
+          ['Sara Noor', '2', 'Noor Ahmed', '03111234567', '5-A']])
+      }, 'Download sample file')),
+    result,
+    card(h('h2', {}, 'All students'), search, listBox));
+  loadList();
+  return wrap;
+}
+
+start();
+</script>
+</body>
+</html>
